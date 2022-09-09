@@ -47,7 +47,10 @@ fn get_nth_arg(n: usize) -> Result<OsString, Box<dyn Error>> {
 fn parse_transaction_file() -> Result<Vec<OperationInput>, Box<dyn Error>> {
     let file_path = get_nth_arg(1)?;
     let mut lines: Vec<OperationInput> = Vec::new();
-    let mut file_rdr = ReaderBuilder::new().trim(Trim::All).from_path(file_path)?;
+    let mut file_rdr = ReaderBuilder::new()
+        .trim(Trim::All)
+        .flexible(true)
+        .from_path(file_path)?;
     let mut iter = file_rdr.deserialize();
     while let Some(result) = iter.next() {
         let mut record: OperationInput = result?;
@@ -93,14 +96,21 @@ fn apply_dispute<'a, 'b>(client: &'a mut Client, transaction: &'b Transaction) -
         Transaction::DEPOSIT(cl_id, tx_id, tx_amount) => {
             if *cl_id != client.id {
                 eprintln!(
-                    "Disputed transaction #{} client mismatch exp:{} act:{}",
+                    "DISPUTE #{} client mismatch exp:{} act:{}",
                     tx_id, client.id, cl_id
+                );
+                return false;
+            }
+            if client.locked {
+                eprintln!(
+                    "DISPUTE #{} can't be applied to a locked account {}",
+                    tx_id, client.id
                 );
                 return false;
             }
             if client.available < *tx_amount {
                 eprintln!(
-                    "Disputed transaction #{} client lacks funds {} < {}",
+                    "DISPUTE #{} client lacks funds {} < {}",
                     tx_id, client.available, tx_amount
                 );
                 return false;
@@ -111,8 +121,15 @@ fn apply_dispute<'a, 'b>(client: &'a mut Client, transaction: &'b Transaction) -
         Transaction::WITHDRAWAL(cl_id, tx_id, tx_amount) => {
             if *cl_id != client.id {
                 eprintln!(
-                    "Disputed transaction #{} client mismatch exp:{} act:{}",
+                    "DISPUTE #{} client mismatch exp:{} act:{}",
                     tx_id, client.id, cl_id
+                );
+                return false;
+            }
+            if client.locked {
+                eprintln!(
+                    "DISPUTE #{} can't be applied to a locked account {}",
+                    tx_id, client.id
                 );
                 return false;
             }
@@ -129,8 +146,15 @@ fn apply_resolve<'a, 'b>(client: &'a mut Client, transaction: &'b Transaction) -
         Transaction::DEPOSIT(cl_id, tx_id, tx_amount) => {
             if *cl_id != client.id {
                 eprintln!(
-                    "Resolved transaction #{} client mismatch exp:{} act:{}",
+                    "RESOLVE #{} client mismatch exp:{} act:{}",
                     tx_id, client.id, cl_id
+                );
+                return false;
+            }
+            if client.locked {
+                eprintln!(
+                    "RESOLVE #{} can't be applied to a locked account {}",
+                    tx_id, client.id
                 );
                 return false;
             }
@@ -141,8 +165,15 @@ fn apply_resolve<'a, 'b>(client: &'a mut Client, transaction: &'b Transaction) -
         Transaction::WITHDRAWAL(cl_id, tx_id, tx_amount) => {
             if *cl_id != client.id {
                 eprintln!(
-                    "Disputed transaction #{} client mismatch exp:{} act:{}",
+                    "RESOLVE #{} client mismatch exp:{} act:{}",
                     tx_id, client.id, cl_id
+                );
+                return false;
+            }
+            if client.locked {
+                eprintln!(
+                    "RESOLVE #{} can't be applied to a locked account {}",
+                    tx_id, client.id
                 );
                 return false;
             }
@@ -161,8 +192,15 @@ fn apply_chargeback<'a, 'b>(client: &'a mut Client, transaction: &'b Transaction
         Transaction::DEPOSIT(cl_id, tx_id, tx_amount) => {
             if *cl_id != client.id {
                 eprintln!(
-                    "Chargeback transaction #{} client mismatch exp:{} act:{}",
+                    "CHARGEBACK #{} client mismatch exp:{} act:{}",
                     tx_id, client.id, cl_id
+                );
+                return false;
+            }
+            if client.locked {
+                eprintln!(
+                    "CHARGEBACK #{} can't be applied to a locked account {}",
+                    tx_id, client.id
                 );
                 return false;
             }
@@ -174,8 +212,15 @@ fn apply_chargeback<'a, 'b>(client: &'a mut Client, transaction: &'b Transaction
         Transaction::WITHDRAWAL(cl_id, tx_id, tx_amount) => {
             if *cl_id != client.id {
                 eprintln!(
-                    "Disputed transaction #{} client mismatch exp:{} act:{}",
+                    "Chargeback transaction #{} client mismatch exp:{} act:{}",
                     tx_id, client.id, cl_id
+                );
+                return false;
+            }
+            if client.locked {
+                eprintln!(
+                    "CHARGEBACK #{} can't be applied to a locked account {}",
+                    tx_id, client.id
                 );
                 return false;
             }
@@ -199,6 +244,13 @@ fn process_transaction(
             let client = find_client_by_id(clients, *client_id);
             match client {
                 Some(cl) => {
+                    if cl.locked {
+                        eprintln!(
+                            "DEPOSIT #{} can't be applied to a locked account {}",
+                            tx_id, cl.id
+                        );
+                        return;
+                    }
                     cl.available += amount;
                     cl.total += amount;
                 }
@@ -217,17 +269,23 @@ fn process_transaction(
             let client = find_client_by_id(clients, *client_id);
             match client {
                 Some(cl) => {
-                    if cl.available > *amount {
-                        cl.available -= cl.available;
-                        cl.total -= cl.available;
-                        // Only register the withdrawal if it was successful
-                        operations.push(transaction.clone());
-                    } else {
+                    if cl.locked {
+                        eprintln!(
+                            "WITHDRAWAL #{} can't be applied to a locked account {}",
+                            tx_id, cl.id
+                        );
+                        return;
+                    }
+                    if cl.available < *amount {
                         eprintln!(
                             "WITHDRAWAL #{} doesn't have enough funds ({} < {})",
                             tx_id, cl.available, amount
                         );
                     }
+                    cl.available -= *amount;
+                    cl.total -= *amount;
+                    // Only register the withdrawal if it was successful
+                    operations.push(transaction.clone());
                 }
                 None => {
                     eprintln!("WITHDRAWAL #{} unknown client {}", tx_id, client_id);
@@ -284,7 +342,7 @@ fn process_transaction(
         Transaction::CHARGEBACK(client_id, tx_id) => {
             let client = find_client_by_id(clients, *client_id);
             match client {
-                Some(mut cl) => {
+                Some(cl) => {
                     let operation = find_operation_by_id(disputes, *tx_id);
                     match operation {
                         Some(chargeback_tx) => {
@@ -369,7 +427,7 @@ fn main() {
                     eprintln!("{}", err);
                     process::exit(1)
                 }
-                _ => ()
+                _ => (),
             }
         }
         Err(err) => {

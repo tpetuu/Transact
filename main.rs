@@ -409,8 +409,11 @@ fn process_transaction_list<'a>(clients: &'a mut Vec<Client>, lst: Vec<Operation
     }
 }
 
-fn dump_clients(_clients: &[Client]) -> Result<(), Box<dyn Error>> {
-    let mut out = csv::Writer::from_writer(io::stdout());
+fn dump_clients(clients: &[Client]) -> Result<(), Box<dyn Error>> {
+    let mut out = csv::WriterBuilder::new().has_headers(true).from_writer(io::stdout());
+    for cl in clients {
+        out.serialize(cl)?
+    }
     out.flush()?;
     Ok(())
 }

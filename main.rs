@@ -281,6 +281,7 @@ fn process_transaction(
                             "WITHDRAWAL #{} doesn't have enough funds ({} < {})",
                             tx_id, cl.available, amount
                         );
+                        return;
                     }
                     cl.available -= *amount;
                     cl.total -= *amount;

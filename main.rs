@@ -91,6 +91,8 @@ fn remove_operation_by_id(transactions: &mut Vec<Transaction>, trans_id: u32) {
     }
 }
 
+/// Attempts to perform a disputed operation on the specified client.
+/// Returns true in case of success, or false if the dispute cannot be aplied.
 fn apply_dispute<'a, 'b>(client: &'a mut Client, transaction: &'b Transaction) -> bool {
     match transaction {
         Transaction::DEPOSIT(cl_id, tx_id, tx_amount) => {
@@ -141,6 +143,8 @@ fn apply_dispute<'a, 'b>(client: &'a mut Client, transaction: &'b Transaction) -
     true
 }
 
+/// Attempts to resolve the disputed operation on the specified client.
+/// Returns true in case of success, or false if the operation cannot be aplied.
 fn apply_resolve<'a, 'b>(client: &'a mut Client, transaction: &'b Transaction) -> bool {
     match transaction {
         Transaction::DEPOSIT(cl_id, tx_id, tx_amount) => {
@@ -187,6 +191,8 @@ fn apply_resolve<'a, 'b>(client: &'a mut Client, transaction: &'b Transaction) -
     true
 }
 
+/// Applies a chargeback operation on the specified client.
+/// Returns true in case of success, or false if the operation cannot be aplied.
 fn apply_chargeback<'a, 'b>(client: &'a mut Client, transaction: &'b Transaction) -> bool {
     match transaction {
         Transaction::DEPOSIT(cl_id, tx_id, tx_amount) => {
@@ -230,9 +236,11 @@ fn apply_chargeback<'a, 'b>(client: &'a mut Client, transaction: &'b Transaction
         }
         _ => return false,
     }
+    client.locked = true;
     true
 }
 
+/// Processes a single transaction, while updating the list of clients, disputable operations, and disputes
 fn process_transaction(
     transaction: &Transaction,
     clients: &mut Vec<Client>,
@@ -254,15 +262,18 @@ fn process_transaction(
                     cl.available += amount;
                     cl.total += amount;
                 }
-                None => clients.push(Client {
-                    id: *client_id,
-                    available: *amount,
-                    held: 0.0,
-                    total: *amount,
-                    locked: false,
-                }),
+                None => {
+                    // If the client is not found, neet to create a new record for it.
+                    clients.push(Client {
+                        id: *client_id,
+                        available: *amount,
+                        held: 0.0,
+                        total: *amount,
+                        locked: false,
+                    })
+                }
             }
-            // Deposit is always accepted, and registered in the list
+            // Deposit is always accepted, and registered in the disputable list
             operations.push(Transaction::DEPOSIT(*client_id, *tx_id, *amount));
         }
         Transaction::WITHDRAWAL(client_id, tx_id, amount) => {
@@ -285,7 +296,7 @@ fn process_transaction(
                     }
                     cl.available -= *amount;
                     cl.total -= *amount;
-                    // Only register the withdrawal if it was successful
+                    // Only register the withdrawal in disputable list if it was successful
                     operations.push(transaction.clone());
                 }
                 None => {
@@ -310,7 +321,7 @@ fn process_transaction(
                             return;
                         }
                     }
-                    // Once the dispute is handled, the operation can no longer be "challenged" again
+                    // Once the dispute is handled, the same operation can no longer be "challenged" again
                     remove_operation_by_id(operations, *tx_id);
                 }
                 None => {
@@ -350,7 +361,6 @@ fn process_transaction(
                             if apply_chargeback(cl, chargeback_tx) {
                                 // Once the dispute is resolved, the operation can no longer be "finalized" again
                                 remove_operation_by_id(disputes, *tx_id);
-                                cl.locked = true;
                             }
                         }
                         None => {
@@ -366,19 +376,22 @@ fn process_transaction(
     }
 }
 
+/// Processes a list of string transactions, parsed by the serde, while building a list of clients
+/// according to the operations in the transaction list.
 fn process_transaction_list<'a>(clients: &'a mut Vec<Client>, lst: Vec<OperationInput>) {
-    let mut transactions: Vec<Transaction> = Vec::new();
-    let mut disputes: Vec<Transaction> = Vec::new();
+    let mut transactions: Vec<Transaction> = Vec::new(); // Keeps the transactions that can be disputed
+    let mut disputes: Vec<Transaction> = Vec::new(); // Keeps the list of disputed transactions
     for l in lst {
         let transaction: Transaction;
         let op_str = l.op_type.as_str();
         match op_str {
+            // Need to convert from string representation to an Enum
             "deposit" => match l.amount {
                 Some(amount) => {
                     transaction = Transaction::DEPOSIT(l.client, l.tx, amount);
                 }
                 None => {
-                    eprintln!("DEPOSIT #{} missing amount, skipping", l.tx);
+                    eprintln!("DEPOSIT #{} missing amount", l.tx);
                     continue;
                 }
             },
@@ -387,7 +400,7 @@ fn process_transaction_list<'a>(clients: &'a mut Vec<Client>, lst: Vec<Operation
                     transaction = Transaction::WITHDRAWAL(l.client, l.tx, amount);
                 }
                 None => {
-                    eprintln!("WITHDRAWAL #{} missing amount, skipping", l.tx);
+                    eprintln!("WITHDRAWAL #{} missing amount", l.tx);
                     continue;
                 }
             },

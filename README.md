@@ -38,3 +38,9 @@ The program outputs the list of clients to the `stdout` in the following format:
 ## Possible Improvements
 
 In current implementation, the structures holding the Clients and Transactions are simple vectors, which makes searching for a particular transaction slow. Using HashMap is possible to speed up the processing, but it wasn't not done due to lack of time (and experience with this structure). It would also allow checking for uniqueness of transaction IDs, which is not done today. This leads to a dispute transactions always looking for the first matching ID.
+
+The Transaction enum can be converted to a set of proper structs which support common traits. This can be used to simplify or remove many match cases and use struct behavior instead. That will remove a lot of repeated code as well.
+
+Source file can be split to a number of files to improve maintainability and readability.
+
+Possibly a proper OO design, encapsulating the lists of transactions, clients and disputes in an external struct, and defining methods modifying the state of this object.

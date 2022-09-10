@@ -2,9 +2,10 @@ use csv::{ReaderBuilder, Trim};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::ffi::OsString;
-use std::{env, u16};
+use std::env;
 use std::{io, process};
 
+/// Client data structure with support for serialized output
 #[derive(Serialize, Debug)]
 struct Client {
     #[serde(rename = "client")]
@@ -15,6 +16,7 @@ struct Client {
     locked: bool,
 }
 
+/// Type describing the possible transactions supported by the engine
 #[derive(Debug, Clone)]
 enum Transaction {
     DEPOSIT(u16, u32, f32),
@@ -24,7 +26,8 @@ enum Transaction {
     CHARGEBACK(u16, u32),
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+/// This struct holds the CSV line input, deserialized from the file
+#[derive(Deserialize, Debug)]
 struct OperationInput {
     #[serde(rename = "type")]
     op_type: String,

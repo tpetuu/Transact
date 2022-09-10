@@ -63,6 +63,7 @@ fn remove_operation_by_id(transactions: &mut Vec<Transaction>, trans_id: u32) {
     while i < transactions.len() {
         if is_same_tx_id(&transactions[i], trans_id) {
             transactions.remove(i);
+            break
         } else {
             i += 1;
         }

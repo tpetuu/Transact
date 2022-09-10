@@ -42,28 +42,6 @@ fn get_nth_arg(n: usize) -> Result<OsString, Box<dyn Error>> {
     }
 }
 
-/// Builds a vector of CSV string record from the file name given in the first command line argument.
-/// If the file is not found, or the file name not provided, returns an error.
-fn parse_transaction_file() -> Result<Vec<OperationInput>, Box<dyn Error>> {
-    let file_path = get_nth_arg(1)?;
-    let mut lines: Vec<OperationInput> = Vec::new();
-    let mut file_rdr = ReaderBuilder::new()
-        .trim(Trim::All)
-        .flexible(true)
-        .from_path(file_path)?;
-    let mut iter = file_rdr.deserialize();
-    while let Some(result) = iter.next() {
-        let mut record: OperationInput = result?;
-        if record.amount.is_some() {
-            // Trim amount to four digits after the decimal point
-            let anount_prec = (record.amount.unwrap() * 10000.0) as i64;
-            record.amount = Some((anount_prec as f32) / 10000.0);
-        }
-        lines.push(record);
-    }
-    Ok(lines)
-}
-
 fn find_client_by_id<'a>(clients: &'a mut Vec<Client>, client_id: u16) -> Option<&'a mut Client> {
     clients.iter_mut().find(|c| c.id == client_id)
 }
@@ -423,10 +401,44 @@ fn process_transaction_list<'a>(clients: &'a mut Vec<Client>, lst: Vec<Operation
     }
 }
 
+/// Trims the float value to four digits after the decimal point
+fn round_to_4th_digit(val: f32) -> f32 {
+    ((val * 10000.0) as i64) as f32 / 10000.0
+}
+
+
+/// Builds a vector of CSV string record from the file name given in the first command line argument.
+/// If the file is not found, or the file name not provided, returns an error.
+fn parse_transaction_file() -> Result<Vec<OperationInput>, Box<dyn Error>> {
+    let file_path = get_nth_arg(1)?;
+    let mut lines: Vec<OperationInput> = Vec::new();
+    let mut file_rdr = ReaderBuilder::new()
+        .trim(Trim::All)
+        .flexible(true)
+        .from_path(file_path)?;
+    let mut iter = file_rdr.deserialize();
+    while let Some(result) = iter.next() {
+        let mut record: OperationInput = result?;
+        if record.amount.is_some() {
+            record.amount = Some(round_to_4th_digit(record.amount.unwrap()));
+        }
+        lines.push(record);
+    }
+    Ok(lines)
+}
+
+/// Writes a CSV list of records corresponding to the client list in clients to stdout.
 fn dump_clients(clients: &[Client]) -> Result<(), Box<dyn Error>> {
-    let mut out = csv::WriterBuilder::new().has_headers(true).from_writer(io::stdout());
+    let mut out = csv::WriterBuilder::new().from_writer(io::stdout());
+    out.serialize(("client", "available", "held", "total", "locked"))?;
     for cl in clients {
-        out.serialize(cl)?
+        out.serialize((
+            cl.id,
+            round_to_4th_digit(cl.available),
+            round_to_4th_digit(cl.held),
+            round_to_4th_digit(cl.total),
+            cl.locked,
+        ))?;
     }
     out.flush()?;
     Ok(())

@@ -1,8 +1,10 @@
 use csv::{ReaderBuilder, Trim};
+use serde::ser::StdError;
 use serde::{Deserialize, Serialize};
+use std::env;
 use std::error::Error;
 use std::ffi::OsString;
-use std::env;
+use std::fmt;
 use std::{io, process};
 
 /// Client data structure with support for serialized output
@@ -19,11 +21,48 @@ struct Client {
 /// Type describing the possible transactions supported by the engine
 #[derive(Debug, Clone)]
 enum Transaction {
-    DEPOSIT(u16, u32, f32),
-    WITHDRAWAL(u16, u32, f32),
-    DISPUTE(u16, u32),
-    RESOLVE(u16, u32),
-    CHARGEBACK(u16, u32),
+    Deposit(u16, u32, f32),
+    Withdrawal(u16, u32, f32),
+    Dispute(u16, u32),
+    Resolve(u16, u32),
+    Chargeback(u16, u32),
+}
+
+#[derive(Debug)]
+struct ParserError {
+    messsage: String,
+}
+
+impl ParserError {
+    fn new(msg: &String) -> ParserError {
+        ParserError {
+            messsage: msg.to_string(),
+        }
+    }
+}
+
+impl fmt::Display for ParserError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.messsage)
+    }
+}
+
+impl Error for ParserError {
+    fn description(&self) -> &str {
+        &self.messsage
+    }
+}
+
+impl From<Box<dyn StdError>> for ParserError {
+    fn from(err: Box<dyn StdError>) -> Self {
+        ParserError::new(&err.to_string())
+    }
+}
+
+impl From<csv::Error> for ParserError {
+    fn from(err: csv::Error) -> Self {
+        ParserError::new(&err.to_string())
+    }
 }
 
 /// This struct holds the CSV line input, deserialized from the file
@@ -45,19 +84,19 @@ fn get_nth_arg(n: usize) -> Result<OsString, Box<dyn Error>> {
     }
 }
 
-fn find_client_by_id<'a>(clients: &'a mut Vec<Client>, client_id: u16) -> Option<&'a mut Client> {
+fn find_client_by_id(clients: &mut [Client], client_id: u16) -> Option<&mut Client> {
     clients.iter_mut().find(|c| c.id == client_id)
 }
 
 fn is_same_tx_id(tx: &Transaction, trans_id: u32) -> bool {
     match tx {
-        Transaction::DEPOSIT(_, list_trans_id, _) => *list_trans_id == trans_id,
-        Transaction::WITHDRAWAL(_, list_trans_id, _) => *list_trans_id == trans_id,
+        Transaction::Deposit(_, list_trans_id, _) => *list_trans_id == trans_id,
+        Transaction::Withdrawal(_, list_trans_id, _) => *list_trans_id == trans_id,
         _ => false,
     }
 }
 
-fn find_operation_by_id(transactions: &Vec<Transaction>, trans_id: u32) -> Option<&Transaction> {
+fn find_operation_by_id(transactions: &[Transaction], trans_id: u32) -> Option<&Transaction> {
     transactions.iter().find(|&tx| is_same_tx_id(tx, trans_id))
 }
 
@@ -66,7 +105,7 @@ fn remove_operation_by_id(transactions: &mut Vec<Transaction>, trans_id: u32) {
     while i < transactions.len() {
         if is_same_tx_id(&transactions[i], trans_id) {
             transactions.remove(i);
-            break
+            break;
         } else {
             i += 1;
         }
@@ -75,9 +114,9 @@ fn remove_operation_by_id(transactions: &mut Vec<Transaction>, trans_id: u32) {
 
 /// Attempts to perform a disputed operation on the specified client.
 /// Returns true in case of success, or false if the dispute cannot be aplied.
-fn apply_dispute<'a, 'b>(client: &'a mut Client, transaction: &'b Transaction) -> bool {
+fn apply_dispute(client: &mut Client, transaction: &Transaction) -> bool {
     match transaction {
-        Transaction::DEPOSIT(cl_id, tx_id, tx_amount) => {
+        Transaction::Deposit(cl_id, tx_id, tx_amount) => {
             if *cl_id != client.id {
                 eprintln!(
                     "DISPUTE #{} client mismatch exp:{} act:{}",
@@ -102,7 +141,7 @@ fn apply_dispute<'a, 'b>(client: &'a mut Client, transaction: &'b Transaction) -
             client.available -= tx_amount;
             client.held += tx_amount;
         }
-        Transaction::WITHDRAWAL(cl_id, tx_id, tx_amount) => {
+        Transaction::Withdrawal(cl_id, tx_id, tx_amount) => {
             if *cl_id != client.id {
                 eprintln!(
                     "DISPUTE #{} client mismatch exp:{} act:{}",
@@ -127,9 +166,9 @@ fn apply_dispute<'a, 'b>(client: &'a mut Client, transaction: &'b Transaction) -
 
 /// Attempts to resolve the disputed operation on the specified client.
 /// Returns true in case of success, or false if the operation cannot be aplied.
-fn apply_resolve<'a, 'b>(client: &'a mut Client, transaction: &'b Transaction) -> bool {
+fn apply_resolve(client: &mut Client, transaction: &Transaction) -> bool {
     match transaction {
-        Transaction::DEPOSIT(cl_id, tx_id, tx_amount) => {
+        Transaction::Deposit(cl_id, tx_id, tx_amount) => {
             if *cl_id != client.id {
                 eprintln!(
                     "RESOLVE #{} client mismatch exp:{} act:{}",
@@ -148,7 +187,7 @@ fn apply_resolve<'a, 'b>(client: &'a mut Client, transaction: &'b Transaction) -
             client.held -= tx_amount;
             client.available += tx_amount;
         }
-        Transaction::WITHDRAWAL(cl_id, tx_id, tx_amount) => {
+        Transaction::Withdrawal(cl_id, tx_id, tx_amount) => {
             if *cl_id != client.id {
                 eprintln!(
                     "RESOLVE #{} client mismatch exp:{} act:{}",
@@ -175,9 +214,9 @@ fn apply_resolve<'a, 'b>(client: &'a mut Client, transaction: &'b Transaction) -
 
 /// Applies a chargeback operation on the specified client.
 /// Returns true in case of success, or false if the operation cannot be aplied.
-fn apply_chargeback<'a, 'b>(client: &'a mut Client, transaction: &'b Transaction) -> bool {
+fn apply_chargeback(client: &mut Client, transaction: &Transaction) -> bool {
     match transaction {
-        Transaction::DEPOSIT(cl_id, tx_id, tx_amount) => {
+        Transaction::Deposit(cl_id, tx_id, tx_amount) => {
             if *cl_id != client.id {
                 eprintln!(
                     "CHARGEBACK #{} client mismatch exp:{} act:{}",
@@ -197,7 +236,7 @@ fn apply_chargeback<'a, 'b>(client: &'a mut Client, transaction: &'b Transaction
             assert!(client.total >= *tx_amount); // Sanity check, shouldn't happen
             client.total -= tx_amount;
         }
-        Transaction::WITHDRAWAL(cl_id, tx_id, tx_amount) => {
+        Transaction::Withdrawal(cl_id, tx_id, tx_amount) => {
             if *cl_id != client.id {
                 eprintln!(
                     "Chargeback transaction #{} client mismatch exp:{} act:{}",
@@ -230,7 +269,7 @@ fn process_transaction(
     disputes: &mut Vec<Transaction>,
 ) {
     match transaction {
-        Transaction::DEPOSIT(client_id, tx_id, amount) => {
+        Transaction::Deposit(client_id, tx_id, amount) => {
             let client = find_client_by_id(clients, *client_id);
             match client {
                 Some(cl) => {
@@ -256,9 +295,9 @@ fn process_transaction(
                 }
             }
             // Deposit is always accepted, and registered in the disputable list
-            operations.push(Transaction::DEPOSIT(*client_id, *tx_id, *amount));
+            operations.push(Transaction::Deposit(*client_id, *tx_id, *amount));
         }
-        Transaction::WITHDRAWAL(client_id, tx_id, amount) => {
+        Transaction::Withdrawal(client_id, tx_id, amount) => {
             let client = find_client_by_id(clients, *client_id);
             match client {
                 Some(cl) => {
@@ -286,7 +325,7 @@ fn process_transaction(
                 }
             }
         }
-        Transaction::DISPUTE(client_id, tx_id) => {
+        Transaction::Dispute(client_id, tx_id) => {
             let client = find_client_by_id(clients, *client_id);
             match client {
                 Some(cl) => {
@@ -311,7 +350,7 @@ fn process_transaction(
                 }
             }
         }
-        Transaction::RESOLVE(client_id, tx_id) => {
+        Transaction::Resolve(client_id, tx_id) => {
             let client = find_client_by_id(clients, *client_id);
             match client {
                 Some(cl) => {
@@ -333,7 +372,7 @@ fn process_transaction(
                 }
             }
         }
-        Transaction::CHARGEBACK(client_id, tx_id) => {
+        Transaction::Chargeback(client_id, tx_id) => {
             let client = find_client_by_id(clients, *client_id);
             match client {
                 Some(cl) => {
@@ -360,7 +399,7 @@ fn process_transaction(
 
 /// Processes a list of string transactions, parsed by the serde, while building a list of clients
 /// according to the operations in the transaction list.
-fn process_transaction_list<'a>(clients: &'a mut Vec<Client>, lst: Vec<OperationInput>) {
+fn process_transaction_list(clients: &mut Vec<Client>, lst: Vec<OperationInput>) {
     let mut transactions: Vec<Transaction> = Vec::new(); // Keeps the transactions that can be disputed
     let mut disputes: Vec<Transaction> = Vec::new(); // Keeps the list of disputed transactions
     for l in lst {
@@ -370,7 +409,7 @@ fn process_transaction_list<'a>(clients: &'a mut Vec<Client>, lst: Vec<Operation
             // Need to convert from string representation to an Enum
             "deposit" => match l.amount {
                 Some(amount) => {
-                    transaction = Transaction::DEPOSIT(l.client, l.tx, amount);
+                    transaction = Transaction::Deposit(l.client, l.tx, amount);
                 }
                 None => {
                     eprintln!("DEPOSIT #{} missing amount", l.tx);
@@ -379,7 +418,7 @@ fn process_transaction_list<'a>(clients: &'a mut Vec<Client>, lst: Vec<Operation
             },
             "withdrawal" => match l.amount {
                 Some(amount) => {
-                    transaction = Transaction::WITHDRAWAL(l.client, l.tx, amount);
+                    transaction = Transaction::Withdrawal(l.client, l.tx, amount);
                 }
                 None => {
                     eprintln!("WITHDRAWAL #{} missing amount", l.tx);
@@ -387,13 +426,13 @@ fn process_transaction_list<'a>(clients: &'a mut Vec<Client>, lst: Vec<Operation
                 }
             },
             "dispute" => {
-                transaction = Transaction::DISPUTE(l.client, l.tx);
+                transaction = Transaction::Dispute(l.client, l.tx);
             }
             "resolve" => {
-                transaction = Transaction::RESOLVE(l.client, l.tx);
+                transaction = Transaction::Resolve(l.client, l.tx);
             }
             "chargeback" => {
-                transaction = Transaction::CHARGEBACK(l.client, l.tx);
+                transaction = Transaction::Chargeback(l.client, l.tx);
             }
             _ => {
                 eprintln!("Unknown operation: {op_str}");
@@ -410,18 +449,16 @@ fn round_to_4th_digit(val: f32) -> f32 {
     ((val * 10000.0) as i64) as f32 / 10000.0
 }
 
-
 /// Builds a vector of CSV string record from the file name given in the first command line argument.
 /// If the file is not found, or the file name not provided, returns an error.
-fn parse_transaction_file() -> Result<Vec<OperationInput>, Box<dyn Error>> {
+fn parse_transaction_file() -> Result<Vec<OperationInput>, ParserError> {
     let file_path = get_nth_arg(1)?;
     let mut lines: Vec<OperationInput> = Vec::new();
     let mut file_rdr = ReaderBuilder::new()
         .trim(Trim::All)
         .flexible(true)
         .from_path(file_path)?;
-    let mut iter = file_rdr.deserialize();
-    while let Some(result) = iter.next() {
+    for result in file_rdr.deserialize() {
         let mut record: OperationInput = result?;
         if record.amount.is_some() {
             record.amount = Some(round_to_4th_digit(record.amount.unwrap()));
@@ -455,12 +492,9 @@ fn main() {
         Ok(v) => {
             process_transaction_list(&mut clients, v);
             let dump_res = dump_clients(clients.as_slice());
-            match dump_res {
-                Err(err) => {
-                    eprintln!("{}", err);
-                    process::exit(1)
-                }
-                _ => (),
+            if let Err(err) = dump_res {
+                eprintln!("{}", err);
+                process::exit(1)
             }
         }
         Err(err) => {

@@ -12,4 +12,4 @@ csv = "1.1"
 
 [[bin]]
 name = "transact"
-path = "main.rs"
+path = "src/main.rs"
